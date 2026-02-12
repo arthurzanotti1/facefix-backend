@@ -12,7 +12,15 @@ app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
 // ---------- uploads dir ----------
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+// ---------- results dir ----------
+const RESULTS_DIR = path.join(process.cwd(), "results");
+if (!fs.existsSync(RESULTS_DIR)) {
+  fs.mkdirSync(RESULTS_DIR, { recursive: true });
+}
 
 // ---------- multer storage ----------
 const storage = multer.diskStorage({
@@ -28,15 +36,18 @@ const upload = multer({
   limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
 });
 
-// ---------- in-memory jobs (пока без БД) ----------
-const jobs = new Map(); // jobId -> { status, createdAt, filename, preset }
+// ---------- in-memory jobs ----------
+const jobs = new Map();
 
+// ---------- POST impression ----------
 app.post("/v1/impression", upload.single("image"), (req, res) => {
-  // fields: preset (string)
   const preset = String(req.body?.preset || "Original");
 
   if (!req.file) {
-    return res.status(400).json({ ok: false, error: "No image file. Use field name 'image'." });
+    return res.status(400).json({
+      ok: false,
+      error: "No image file. Use field name 'image'.",
+    });
   }
 
   const jobId = uuidv4();
@@ -48,10 +59,23 @@ app.post("/v1/impression", upload.single("image"), (req, res) => {
     preset,
   });
 
-  // Пока “фейково” завершаем задачу через 2 секунды
+  // имитация обработки
   setTimeout(() => {
-    const j = jobs.get(jobId);
-    if (j) jobs.set(jobId, { ...j, status: "done" });
+    const job = jobs.get(jobId);
+    if (!job) return;
+
+    const sourcePath = path.join(UPLOAD_DIR, job.filename);
+    const resultPath = path.join(RESULTS_DIR, job.filename);
+
+    // просто копируем файл как будто он обработан
+    if (fs.existsSync(sourcePath)) {
+      fs.copyFileSync(sourcePath, resultPath);
+    }
+
+    jobs.set(jobId, {
+      ...job,
+      status: "done",
+    });
   }, 2000);
 
   return res.json({
@@ -62,13 +86,37 @@ app.post("/v1/impression", upload.single("image"), (req, res) => {
   });
 });
 
+// ---------- GET job status ----------
 app.get("/v1/jobs/:jobId", (req, res) => {
   const { jobId } = req.params;
   const job = jobs.get(jobId);
 
-  if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
+  if (!job) {
+    return res.status(404).json({
+      ok: false,
+      error: "Job not found",
+    });
+  }
 
-  res.json({ ok: true, jobId, ...job });
+  res.json({
+    ok: true,
+    jobId,
+    ...job,
+  });
+});
+
+// ---------- GET result file ----------
+app.get("/v1/result/:filename", (req, res) => {
+  const filePath = path.join(RESULTS_DIR, req.params.filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      ok: false,
+      error: "Result file not found",
+    });
+  }
+
+  res.sendFile(filePath);
 });
 
 // ---------- start ----------
