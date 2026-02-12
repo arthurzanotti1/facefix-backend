@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "multer": "^2.0.2",
+    "replicate": "^1.4.0",
     "uuid": "^13.0.0"
   }
 }
