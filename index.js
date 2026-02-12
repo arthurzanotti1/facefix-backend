@@ -2,13 +2,12 @@ import express from "express";
 
 const app = express();
 
-app.get("/", (req, res) => {
-  res.json({ ok: true, message: "FaceFix Backend Running 🚀" });
-});
+// healthcheck
+app.get("/", (_req, res) => res.status(200).send("OK"));
+app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
-// Railway sets PORT. DO NOT hardcode 8080.
 const PORT = Number(process.env.PORT || 3000);
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port", PORT);
+  console.log("Listening on", PORT);
 });
