@@ -100,40 +100,49 @@ function normalizePreset(presetRaw) {
 const presetConfig = {
   original: { mode: "none" },
 
+  // Hollywood: strong cinematic relight (may affect scene a bit, but gives the "glam" look)
   hollywood: {
     lora_weights: "dx8152/Qwen-Image-Edit-2509-Relight",
     lora_scale: 0.9,
-    prompt: "cinematic hollywood portrait lighting, warm glow, soft shadows, subtle glamour, realistic",
+    prompt:
+      "portrait beauty enhancement, hollywood glamour lighting, warm soft key light on face, natural skin texture, keep identity, do not change background",
   },
 
+  // Cool: switch to Skin LoRA so it actually edits the FACE (not just the background)
   cool: {
-    lora_weights: "dx8152/Qwen-Image-Edit-2509-Light_restoration",
-    lora_scale: 0.9,
-    prompt: "cool clean studio look, slightly cooler tones, balanced lighting, realistic, keep identity",
-  },
-
-  model: {
     lora_weights: "tlennon-ie/qwen-edit-skin",
     lora_scale: 1.0,
-    prompt: "high-end fashion model portrait, refined details, clean skin tone, realistic texture, keep identity",
+    prompt:
+      "portrait retouch focused on face, cooler clean look, reduce shine, refine skin tone, subtle eye clarity, keep identity, do not change background",
+  },
+
+  // Model and Natural swapped (as you requested)
+  model: {
+    lora_weights: "tlennon-ie/qwen-edit-skin",
+    lora_scale: 0.9,
+    prompt:
+      "natural beauty retouch, keep pores and skin texture, subtle improvements only, realistic, keep identity, do not change background",
   },
 
   elegant: {
-    lora_weights: "dx8152/Qwen-Image-Edit-2509-Light_restoration",
-    lora_scale: 0.8,
-    prompt: "elegant soft portrait, gentle highlights, flattering light, minimal retouch, realistic",
+    lora_weights: "tlennon-ie/qwen-edit-skin",
+    lora_scale: 1.0,
+    prompt:
+      "elegant portrait retouch, smooth but realistic skin, gentle glow on face, refined look, keep identity, do not change background",
   },
 
   fierce: {
     lora_weights: "tlennon-ie/qwen-edit-skin",
-    lora_scale: 1.2,
-    prompt: "fierce editorial portrait, stronger contrast, crisp eyes, bold lighting, still realistic skin texture",
+    lora_scale: 1.25,
+    prompt:
+      "fierce editorial portrait retouch, sharper eyes, slightly higher contrast on face, crisp details, realistic skin texture, keep identity, do not change background",
   },
 
   natural: {
     lora_weights: "tlennon-ie/qwen-edit-skin",
-    lora_scale: 0.9,
-    prompt: "natural beauty retouch, keep pores and skin texture, subtle improvements, realistic",
+    lora_scale: 1.0,
+    prompt:
+      "high-end fashion model portrait retouch, refined details, clean skin tone, realistic texture, keep identity, do not change background",
   },
 };
 
