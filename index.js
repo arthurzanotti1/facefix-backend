@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
@@ -9,6 +10,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+/**
+ * -------------------------
+ * CORS (fix "Failed to fetch" in web previews / browsers)
+ * -------------------------
+ * Allows requests from Rork web preview and mobile apps.
+ */
+app.use(
+  cors({
+    origin: true, // reflect request origin
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+// Handle preflight requests
+app.options("*", cors());
 
 /**
  * -------------------------
@@ -49,12 +66,7 @@ function toDataUrl(filePath) {
   const buf = fs.readFileSync(filePath);
   // Best-effort mime by extension
   const ext = path.extname(filePath).toLowerCase();
-  const mime =
-    ext === ".png"
-      ? "image/png"
-      : ext === ".webp"
-      ? "image/webp"
-      : "image/jpeg";
+  const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
@@ -229,6 +241,7 @@ app.post("/v1/impression", upload.single("image"), async (req, res) => {
       }
 
       // 2) Otherwise -> run GFPGAN on Replicate
+      // NOTE: Right now preset is not used by GFPGAN model.
       const dataUrl = toDataUrl(inputPath);
 
       const prediction = await replicateCreatePrediction({
@@ -303,6 +316,8 @@ app.get("/v1/result/:filename", (req, res) => {
     return res.status(404).json({ error: "File not found" });
   }
 
+  // Allow caching results a bit (optional)
+  res.setHeader("Cache-Control", "public, max-age=3600");
   return res.sendFile(filePath);
 });
 
