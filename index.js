@@ -11,316 +11,166 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-/**
- * -------------------------
- * CORS (fix "Failed to fetch" in web previews / browsers)
- * -------------------------
- * Allows requests from Rork web preview and mobile apps.
- */
-app.use(
-  cors({
-    origin: true, // reflect request origin
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-// Handle preflight requests
+app.use(cors());
 app.options("*", cors());
 
-/**
- * -------------------------
- * Config
- * -------------------------
- */
 const PORT = Number(process.env.PORT || 8080);
+const UPLOADS_DIR = path.join(__dirname, "uploads");
+const RESULTS_DIR = path.join(__dirname, "results");
 
-// Where we keep incoming uploads (temp) and generated results
-const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
-const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, "results");
+const REPLICATE_API_TOKEN =
+  process.env.REPLICATE_API_TOKEN || process.env.REPLICATE_TOKEN || "";
 
-// Replicate
-const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN || process.env.REPLICATE_TOKEN || "";
-// GFPGAN on Replicate (version hash). You can override via env.
-const REPLICATE_GFPGAN_VERSION =
-  process.env.REPLICATE_GFPGAN_VERSION ||
-  "a5387bf23f8d1aa78df04a58238988650f165ce65f9529f628143505686e58a9";
+const BASE_VERSION =
+  "23c6dcef1ae2b2a897b37a0f58aac044882c44f711de73225c180e6d52841ae5";
 
-/**
- * -------------------------
- * Helpers
- * -------------------------
- */
-function ensureDir(dirPath) {
-  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function safeExtFromMimetype(mimetype) {
-  if (!mimetype) return ".jpg";
-  if (mimetype.includes("png")) return ".png";
-  if (mimetype.includes("webp")) return ".webp";
-  if (mimetype.includes("jpeg") || mimetype.includes("jpg")) return ".jpg";
-  return ".jpg";
+ensureDir(UPLOADS_DIR);
+ensureDir(RESULTS_DIR);
+
+const presetConfig = {
+  Original: { mode: "none" },
+
+  H: {
+    lora_weights: "dx8152/Qwen-Image-Edit-2509-Relight",
+    lora_scale: 0.9,
+    prompt: "cinematic hollywood lighting, warm glow, soft shadows"
+  },
+
+  C: {
+    lora_weights: "dx8152/Qwen-Image-Edit-2509-Light_restoration",
+    lora_scale: 0.9,
+    prompt: "cool studio lighting, balanced shadows, clean tone"
+  },
+
+  N: {
+    lora_weights: "tlennon-ie/qwen-edit-skin",
+    lora_scale: 0.9,
+    prompt: "natural beauty retouch, realistic skin texture"
+  },
+
+  F: {
+    lora_weights: "tlennon-ie/qwen-edit-skin",
+    lora_scale: 1.2,
+    prompt: "dramatic editorial look, higher contrast"
+  },
+
+  M: {
+    lora_weights: "tlennon-ie/qwen-edit-skin",
+    lora_scale: 1.0,
+    prompt: "high-end fashion portrait, refined details"
+  },
+
+  E: {
+    lora_weights: "dx8152/Qwen-Image-Edit-2509-Light_restoration",
+    lora_scale: 0.8,
+    prompt: "elegant soft portrait lighting"
+  }
+};
+
+function newJobId() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString("hex");
 }
 
 function toDataUrl(filePath) {
   const buf = fs.readFileSync(filePath);
-  // Best-effort mime by extension
-  const ext = path.extname(filePath).toLowerCase();
-  const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-  return `data:${mime};base64,${buf.toString("base64")}`;
+  return `data:image/jpeg;base64,${buf.toString("base64")}`;
 }
 
-async function replicateCreatePrediction({ version, input }) {
-  if (!REPLICATE_API_TOKEN) {
-    throw new Error("REPLICATE_API_TOKEN is missing. Add it in Railway Variables.");
-  }
-
+async function createPrediction(input) {
   const res = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE_API_TOKEN}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify({ version, input }),
+    body: JSON.stringify({
+      version: BASE_VERSION,
+      input
+    })
   });
 
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const detail = json?.detail || json?.error || JSON.stringify(json);
-    throw new Error(`Replicate create prediction failed (${res.status}): ${detail}`);
-  }
-  return json;
+  return res.json();
 }
 
-async function replicateGetPrediction(id) {
-  if (!REPLICATE_API_TOKEN) {
-    throw new Error("REPLICATE_API_TOKEN is missing. Add it in Railway Variables.");
-  }
+async function getPrediction(id) {
+  const res = await fetch(
+    `https://api.replicate.com/v1/predictions/${id}`,
+    { headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` } }
+  );
 
-  const res = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
-    headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const detail = json?.detail || json?.error || JSON.stringify(json);
-    throw new Error(`Replicate get prediction failed (${res.status}): ${detail}`);
-  }
-  return json;
+  return res.json();
 }
 
-async function waitForReplicate(id, { timeoutMs = 120000, pollMs = 1500 } = {}) {
-  const started = Date.now();
-  while (true) {
-    const p = await replicateGetPrediction(id);
-
-    if (p.status === "succeeded") return p;
-    if (p.status === "failed" || p.status === "canceled") {
-      const err = p.error || "Unknown Replicate error";
-      throw new Error(`Replicate failed: ${err}`);
-    }
-
-    if (Date.now() - started > timeoutMs) {
-      throw new Error("Replicate timeout: still not finished");
-    }
-
-    await new Promise((r) => setTimeout(r, pollMs));
-  }
-}
-
-async function downloadToFile(url, filePath) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download result (${res.status})`);
-  const arrayBuffer = await res.arrayBuffer();
-  fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
-}
-
-function newJobId() {
-  return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
-}
-
-function jobFilePath(jobId) {
-  return path.join(RESULTS_DIR, `${jobId}.json`);
-}
-
-function writeJob(jobId, data) {
-  fs.writeFileSync(jobFilePath(jobId), JSON.stringify(data, null, 2));
-}
-
-function readJob(jobId) {
-  const p = jobFilePath(jobId);
-  if (!fs.existsSync(p)) return null;
-  return JSON.parse(fs.readFileSync(p, "utf8"));
-}
-
-/**
- * -------------------------
- * Init dirs
- * -------------------------
- */
-ensureDir(UPLOADS_DIR);
-ensureDir(RESULTS_DIR);
-
-/**
- * -------------------------
- * Multer for multipart/form-data
- * -------------------------
- */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = safeExtFromMimetype(file.mimetype);
-    cb(null, `${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`);
-  },
+  filename: (req, file, cb) =>
+    cb(null, `${Date.now()}-${Math.random().toString(16)}.jpg`)
 });
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
-});
+const upload = multer({ storage });
 
-/**
- * -------------------------
- * Routes
- * -------------------------
- */
-
-// Simple health check
-app.get("/", (req, res) => res.send("OK"));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-/**
- * POST /v1/impression
- * multipart/form-data:
- *  - image: (file) required
- *  - preset: (string) optional. Example: "Beauty"
- *
- * Response: { ok, jobId, status, preset }
- */
 app.post("/v1/impression", upload.single("image"), async (req, res) => {
   const jobId = newJobId();
-  const preset = (req.body?.preset || "Original").toString();
+  const preset = req.body?.preset || "Original";
 
-  if (!req.file?.path) {
-    return res.status(400).json({ ok: false, error: "image is required (field name: image)" });
+  if (!req.file?.path)
+    return res.status(400).json({ error: "Image required" });
+
+  const config = presetConfig[preset];
+  if (!config)
+    return res.status(400).json({ error: "Unknown preset" });
+
+  const outputPath = path.join(RESULTS_DIR, `${jobId}.jpg`);
+
+  if (config.mode === "none") {
+    fs.copyFileSync(req.file.path, outputPath);
+    return res.json({ ok: true, jobId, status: "done", filename: `${jobId}.jpg` });
   }
 
-  // Create job record right away
-  writeJob(jobId, {
-    ok: true,
-    jobId,
-    status: "queued",
-    preset,
-    createdAt: new Date().toISOString(),
+  const dataUrl = toDataUrl(req.file.path);
+
+  const prediction = await createPrediction({
+    image: dataUrl,
+    prompt: config.prompt,
+    lora_weights: config.lora_weights,
+    lora_scale: config.lora_scale,
+    output_format: "jpg"
   });
 
-  // Process async
-  setImmediate(async () => {
-    const startedAt = new Date().toISOString();
-    const inputPath = req.file.path;
+  res.json({ ok: true, jobId, status: "processing" });
 
-    try {
-      const outExt = path.extname(inputPath) || ".jpg";
-      const outName = `${jobId}${outExt}`;
-      const outPath = path.join(RESULTS_DIR, outName);
+  const interval = setInterval(async () => {
+    const status = await getPrediction(prediction.id);
 
-      // 1) If preset is Original -> just copy
-      if (preset.toLowerCase() === "original") {
-        fs.copyFileSync(inputPath, outPath);
-
-        writeJob(jobId, {
-          ok: true,
-          jobId,
-          status: "done",
-          preset,
-          createdAt: startedAt,
-          finishedAt: new Date().toISOString(),
-          filename: outName,
-        });
-        return;
-      }
-
-      // 2) Otherwise -> run GFPGAN on Replicate
-      // NOTE: Right now preset is not used by GFPGAN model.
-      const dataUrl = toDataUrl(inputPath);
-
-      const prediction = await replicateCreatePrediction({
-        version: REPLICATE_GFPGAN_VERSION,
-        input: {
-          img: dataUrl,
-          scale: 2,
-        },
-      });
-
-      const done = await waitForReplicate(prediction.id, { timeoutMs: 180000, pollMs: 1500 });
-
-      // Output can be string URL or array of URLs
-      const output = done.output;
-      const url = Array.isArray(output) ? output[output.length - 1] : output;
-
-      if (!url || typeof url !== "string") {
-        throw new Error(`Unexpected Replicate output: ${JSON.stringify(output)}`);
-      }
-
-      await downloadToFile(url, outPath);
-
-      writeJob(jobId, {
-        ok: true,
-        jobId,
-        status: "done",
-        preset,
-        createdAt: startedAt,
-        finishedAt: new Date().toISOString(),
-        filename: outName,
-        replicate: { id: done.id },
-      });
-    } catch (e) {
-      writeJob(jobId, {
-        ok: true,
-        jobId,
-        status: "error",
-        preset,
-        createdAt: startedAt,
-        finishedAt: new Date().toISOString(),
-        error: e?.message || String(e),
-      });
-    } finally {
-      // cleanup upload temp file
-      try {
-        fs.unlinkSync(req.file.path);
-      } catch {}
+    if (status.status === "succeeded") {
+      const imageUrl = status.output;
+      const imgRes = await fetch(imageUrl);
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+      fs.writeFileSync(outputPath, buffer);
+      clearInterval(interval);
     }
-  });
 
-  return res.json({ ok: true, jobId, status: "queued", preset });
+    if (status.status === "failed") {
+      clearInterval(interval);
+    }
+  }, 2000);
 });
 
-/**
- * GET /v1/jobs/:jobId
- * Returns job status JSON
- */
-app.get("/v1/jobs/:jobId", (req, res) => {
-  const job = readJob(req.params.jobId);
-  if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
-  return res.json(job);
-});
-
-/**
- * GET /v1/result/:filename
- * Downloads resulting file
- */
 app.get("/v1/result/:filename", (req, res) => {
   const filePath = path.join(RESULTS_DIR, req.params.filename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "File not found" });
-  }
-
-  // Allow caching results a bit (optional)
-  res.setHeader("Cache-Control", "public, max-age=3600");
-  return res.sendFile(filePath);
+  if (!fs.existsSync(filePath))
+    return res.status(404).json({ error: "Not found" });
+  res.sendFile(filePath);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`Server running on ${PORT}`)
+);
