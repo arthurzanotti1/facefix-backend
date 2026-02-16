@@ -35,6 +35,9 @@ const REPLICATE_QWEN_VERSION =
   process.env.REPLICATE_QWEN_VERSION ||
   "23c6dcef1ae2b2a897b37a0f58aac044882c44f711de73225c180e6d52841ae5";
 
+const REPLICATE_HAIRCUT_VERSION =
+  "4e98896183ea9c9160b185b617f768d7316a1397fe0a9ed822cee02122311f67";
+
 /**
  * Helpers
  */
@@ -95,6 +98,28 @@ function normalizePreset(presetRaw) {
   if (s === "n" || s === "natural") return "natural";
 
   return null;
+}
+
+
+function normalizeHaircut(raw) {
+  if (!raw) return null;
+  const s = raw.toString().trim().toLowerCase();
+
+  const map = {
+    "bob": "Bob",
+    "pixie": "Pixie Cut",
+    "pixie cut": "Pixie Cut",
+    "long waves": "Long Waves",
+    "shoulder length": "Shoulder Length",
+    "high ponytail": "High Ponytail",
+    "bangs": "Side-Swept Bangs",
+    "side-swept bangs": "Side-Swept Bangs",
+    "braids": "French Braid",
+    "french braid": "French Braid",
+    "messy bun": "Messy Bun",
+  };
+
+  return map[s] || null;
 }
 
 const presetConfig = {
@@ -353,6 +378,104 @@ app.post("/v1/impression", upload.single("image"), async (req, res) => {
 
   return res.json({ ok: true, jobId, status: "queued", preset: presetName });
 });
+
+/**
+ * POST /v1/hair
+ * multipart/form-data:
+ *  - image: (file) required
+ *  - haircut: (string) required. One of: Bob, Pixie Cut, Long Waves, Shoulder Length, High Ponytail, Side-Swept Bangs, French Braid, Messy Bun
+ *  - gender: (string) optional. We force "female" for now.
+ *
+ * Response: { ok, jobId, status, haircut }
+ */
+app.post("/v1/hair", upload.single("image"), async (req, res) => {
+  const jobId = newJobId();
+  const haircut = normalizeHaircut(req.body?.haircut);
+  const gender = "female";
+
+  if (!req.file?.path) {
+    return res.status(400).json({ ok: false, error: "image is required (field name: image)" });
+  }
+
+  if (!haircut) {
+    return res.status(400).json({
+      ok: false,
+      error: "Unknown haircut",
+      receivedHaircut: req.body?.haircut ?? null,
+      allowed: ["Bob", "Pixie Cut", "Long Waves", "Shoulder Length", "High Ponytail", "Side-Swept Bangs", "French Braid", "Messy Bun"],
+    });
+  }
+
+  writeJob(jobId, {
+    ok: true,
+    jobId,
+    status: "queued",
+    haircut,
+    createdAt: new Date().toISOString(),
+  });
+
+  setImmediate(async () => {
+    const startedAt = new Date().toISOString();
+    const inputPath = req.file.path;
+
+    try {
+      const outName = `${jobId}.jpg`;
+      const outPath = path.join(RESULTS_DIR, outName);
+
+      const dataUrl = toDataUrl(inputPath);
+
+      const prediction = await replicateCreatePrediction({
+        version: REPLICATE_HAIRCUT_VERSION,
+        input: {
+          input_image: dataUrl,
+          haircut,
+          gender,
+          aspect_ratio: "match_input_image",
+          seed: 42,
+        },
+      });
+
+      const done = await waitForReplicate(prediction.id, { timeoutMs: 240000, pollMs: 1500 });
+
+      const output = done.output;
+      const url = Array.isArray(output) ? output[output.length - 1] : output;
+
+      if (!url || typeof url !== "string") {
+        throw new Error(`Unexpected Replicate output: ${JSON.stringify(output)}`);
+      }
+
+      await downloadToFile(url, outPath);
+
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "done",
+        haircut,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        filename: outName,
+        replicate: { id: done.id },
+      });
+    } catch (e) {
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "error",
+        haircut,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        error: e?.message || String(e),
+      });
+    } finally {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {}
+    }
+  });
+
+  return res.json({ ok: true, jobId, status: "queued", haircut });
+});
+
 
 /**
  * GET /v1/jobs/:jobId
