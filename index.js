@@ -101,26 +101,60 @@ function normalizePreset(presetRaw) {
 }
 
 
+
 function normalizeHaircut(raw) {
   if (!raw) return null;
   const s = raw.toString().trim().toLowerCase();
 
+  // IMPORTANT: Replicate model accepts ONLY specific haircut strings (case-sensitive).
+  // We normalize common UI labels -> exact allowed values.
   const map = {
+    // Basics
+    "no change": "No change",
+    "random": "Random",
+    "straight": "Straight",
+    "wavy": "Wavy",
+    "curly": "Curly",
+
+    // Cuts
     "bob": "Bob",
     "pixie": "Pixie Cut",
     "pixie cut": "Pixie Cut",
-    "long waves": "Long Waves",
-    "shoulder length": "Shoulder Length",
-    "high ponytail": "High Ponytail",
-    "bangs": "Side-Swept Bangs",
-    "side-swept bangs": "Side-Swept Bangs",
-    "braids": "French Braid",
-    "french braid": "French Braid",
+    "layered": "Layered",
+    "shag": "Shag",
+    "lob": "Lob",
+    "angled bob": "Angled Bob",
+    "a-line bob": "A-Line Bob",
+
+    // Updos / pony
     "messy bun": "Messy Bun",
+    "high ponytail": "High Ponytail",
+    "low ponytail": "Low Ponytail",
+    "braided ponytail": "Braided Ponytail",
+    "top knot": "Top Knot",
+
+    // Braids
+    "french braid": "French Braid",
+    "dutch braid": "Dutch Braid",
+    "fishtail braid": "Fishtail Braid",
+    "box braids": "Box Braids",
+
+    // Bangs
+    "blunt bangs": "Blunt Bangs",
+    "side-swept bangs": "Side-Swept Bangs",
+    "side swept bangs": "Side-Swept Bangs",
+
+    // Waves styles
+    "soft waves": "Soft Waves",
+    "glam waves": "Glamorous Waves",
+    "glamorous waves": "Glamorous Waves",
+    "hollywood waves": "Hollywood Waves",
+    "finger waves": "Finger Waves",
   };
 
   return map[s] || null;
 }
+
 
 const presetConfig = {
   original: { mode: "none" },
@@ -282,7 +316,7 @@ app.post("/v1/impression", upload.single("image"), async (req, res) => {
       ok: false,
       error: "Unknown preset",
       receivedPreset: req.body?.preset ?? null,
-      allowed: ["Original", "Hollywood", "Cool", "Model", "Elegant", "Fierce", "Natural"],
+      allowed: ["No change","Random","Straight","Wavy","Curly","Bob","Pixie Cut","Layered","Messy Bun","High Ponytail","Low Ponytail","Braided Ponytail","French Braid","Dutch Braid","Fishtail Braid","Top Knot","Blunt Bangs","Side-Swept Bangs","Shag","Lob","Angled Bob","A-Line Bob","Soft Waves","Glamorous Waves","Hollywood Waves","Finger Waves","Box Braids"],
     });
   }
 
@@ -402,7 +436,7 @@ app.post("/v1/hair", upload.single("image"), async (req, res) => {
       ok: false,
       error: "Unknown haircut",
       receivedHaircut: req.body?.haircut ?? null,
-      allowed: ["Bob", "Pixie Cut", "Long Waves", "Shoulder Length", "High Ponytail", "Side-Swept Bangs", "French Braid", "Messy Bun"],
+      allowed: ["No change","Random","Straight","Wavy","Curly","Bob","Pixie Cut","Layered","Messy Bun","High Ponytail","Low Ponytail","Braided Ponytail","French Braid","Dutch Braid","Fishtail Braid","Top Knot","Blunt Bangs","Side-Swept Bangs","Shag","Lob","Angled Bob","A-Line Bob","Soft Waves","Glamorous Waves","Hollywood Waves","Finger Waves","Box Braids"],
     });
   }
 
