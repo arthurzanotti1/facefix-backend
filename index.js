@@ -27,6 +27,8 @@ const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, "results");
 const REPLICATE_API_TOKEN =
   process.env.REPLICATE_API_TOKEN || process.env.REPLICATE_TOKEN || "";
 
+const SIZES_WORKER_URL = process.env.SIZES_WORKER_URL || "https://facefix-sizes-worker-production.up.railway.app";
+
 /**
  * Qwen Image Edit base version:
  * We vary style via LoRA + prompt (so presets are actually different).
@@ -510,6 +512,109 @@ app.post("/v1/hair", upload.single("image"), async (req, res) => {
   return res.json({ ok: true, jobId, status: "queued", haircut });
 });
 
+
+/**
+ * POST /v1/size
+ * multipart/form-data:
+ *  - image: (file) required
+ *  - feature: (string) required: "eyes" | "nose" | "lips"
+ *  - amount: (number) required: -50 to 50
+ *
+ * Response: { ok, jobId, status, feature, amount }
+ */
+app.post("/v1/size", upload.single("image"), async (req, res) => {
+  const jobId = newJobId();
+  const feature = (req.body?.feature || "").toString().trim().toLowerCase();
+  const amount = parseInt(req.body?.amount, 10);
+
+  if (!req.file?.path) {
+    return res.status(400).json({ ok: false, error: "image is required (field name: image)" });
+  }
+
+  const allowedFeatures = ["eyes", "nose", "lips"];
+  if (!allowedFeatures.includes(feature)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Unknown feature",
+      receivedFeature: req.body?.feature ?? null,
+      allowed: allowedFeatures,
+    });
+  }
+
+  if (isNaN(amount) || amount < -50 || amount > 50) {
+    return res.status(400).json({
+      ok: false,
+      error: "amount must be an integer between -50 and 50",
+      receivedAmount: req.body?.amount ?? null,
+    });
+  }
+
+  writeJob(jobId, {
+    ok: true,
+    jobId,
+    status: "queued",
+    feature,
+    amount,
+    createdAt: new Date().toISOString(),
+  });
+
+  setImmediate(async () => {
+    const startedAt = new Date().toISOString();
+    const inputPath = req.file.path;
+
+    try {
+      const outName = `${jobId}.jpg`;
+      const outPath = path.join(RESULTS_DIR, outName);
+
+      const imageBuffer = fs.readFileSync(inputPath);
+      const formData = new FormData();
+      formData.append("image", new Blob([imageBuffer], { type: "image/jpeg" }), "photo.jpg");
+      formData.append("feature", feature);
+      formData.append("amount", String(amount));
+
+      const workerRes = await fetch(`${SIZES_WORKER_URL}/resize`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!workerRes.ok) {
+        const errText = await workerRes.text().catch(() => "");
+        throw new Error(`Sizes worker error (${workerRes.status}): ${errText}`);
+      }
+
+      const arrayBuffer = await workerRes.arrayBuffer();
+      fs.writeFileSync(outPath, Buffer.from(arrayBuffer));
+
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "done",
+        feature,
+        amount,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        filename: outName,
+      });
+    } catch (e) {
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "error",
+        feature,
+        amount,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        error: e?.message || String(e),
+      });
+    } finally {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {}
+    }
+  });
+
+  return res.json({ ok: true, jobId, status: "queued", feature, amount });
+});
 
 /**
  * GET /v1/jobs/:jobId
