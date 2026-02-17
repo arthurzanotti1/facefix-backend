@@ -617,6 +617,95 @@ app.post("/v1/size", upload.single("image"), async (req, res) => {
 });
 
 /**
+ * POST /v1/skin
+ * multipart/form-data:
+ *  - image: (file) required
+ *  - effect: (string) required: "smooth" | "clear" | "glow" | "tan" | "porcelain" | "acne"
+ *
+ * Response: { ok, jobId, status, effect }
+ */
+app.post("/v1/skin", upload.single("image"), async (req, res) => {
+  const jobId = newJobId();
+  const effect = (req.body?.effect || "").toString().trim().toLowerCase();
+
+  if (!req.file?.path) {
+    return res.status(400).json({ ok: false, error: "image is required (field name: image)" });
+  }
+
+  const allowedEffects = ["smooth", "clear", "glow", "tan", "porcelain", "acne"];
+  if (!allowedEffects.includes(effect)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Unknown effect",
+      receivedEffect: req.body?.effect ?? null,
+      allowed: allowedEffects,
+    });
+  }
+
+  writeJob(jobId, {
+    ok: true,
+    jobId,
+    status: "queued",
+    effect,
+    createdAt: new Date().toISOString(),
+  });
+
+  setImmediate(async () => {
+    const startedAt = new Date().toISOString();
+    const inputPath = req.file.path;
+
+    try {
+      const outName = `${jobId}.jpg`;
+      const outPath = path.join(RESULTS_DIR, outName);
+
+      const imageBuffer = fs.readFileSync(inputPath);
+      const formData = new FormData();
+      formData.append("image", new Blob([imageBuffer], { type: "image/jpeg" }), "photo.jpg");
+      formData.append("effect", effect);
+
+      const workerRes = await fetch(`${SIZES_WORKER_URL}/skin`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!workerRes.ok) {
+        const errText = await workerRes.text().catch(() => "");
+        throw new Error(`Skin worker error (${workerRes.status}): ${errText}`);
+      }
+
+      const arrayBuffer = await workerRes.arrayBuffer();
+      fs.writeFileSync(outPath, Buffer.from(arrayBuffer));
+
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "done",
+        effect,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        filename: outName,
+      });
+    } catch (e) {
+      writeJob(jobId, {
+        ok: true,
+        jobId,
+        status: "error",
+        effect,
+        createdAt: startedAt,
+        finishedAt: new Date().toISOString(),
+        error: e?.message || String(e),
+      });
+    } finally {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {}
+    }
+  });
+
+  return res.json({ ok: true, jobId, status: "queued", effect });
+});
+
+/**
  * GET /v1/jobs/:jobId
  */
 app.get("/v1/jobs/:jobId", (req, res) => {
